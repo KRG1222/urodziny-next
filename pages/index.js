@@ -87,73 +87,106 @@ function PhotoPicker({ photo, name, onPhoto, onRemove, inputId }) {
 }
 
 // ── PIN SCREEN ────────────────────────────────────────────
-function PinScreen({ mode, onComplete, onModeChange, onReset }) {
+// Self-contained: manages its own internal stage (setup/confirm/unlock)
+// initialStage is read once on mount and never changes from outside
+function PinScreen({ initialStage, onSaved, onUnlocked, onReset }) {
+  const [stage, setStage] = useState(initialStage);
   const [buffer, setBuffer] = useState('');
   const [first, setFirst] = useState('');
   const [error, setError] = useState('');
   const [shake, setShake] = useState(false);
 
-  // Reset buffer when mode changes externally (e.g. setup -> unlock on refresh)
-  useEffect(() => {
-    setBuffer('');
-    setError('');
-  }, [mode]);
+  const stageRef = useRef(stage);
+  const firstRef = useRef('');
+  useEffect(() => { stageRef.current = stage; }, [stage]);
 
-  const addKey = (d) => {
-    if (buffer.length >= 4) return;
-    const next = buffer + d;
-    setBuffer(next);
-    // Use a callback ref to always read latest mode at execution time
-    if (next.length === 4) {
-      const currentMode = mode;
-      setTimeout(() => handle(next, currentMode), 120);
-    }
+  const doShake = () => {
+    setShake(true);
+    setTimeout(() => setShake(false), 400);
   };
 
-  const handle = (val, currentMode) => {
-    if (currentMode === 'setup') {
-      setFirst(val); setBuffer(''); setError('');
-      onModeChange('setup-confirm');
-    } else if (currentMode === 'setup-confirm') {
-      if (val === first) { onComplete(val); }
-      else { setError('PINy się nie zgadzają.'); doShake(); setTimeout(() => { onModeChange('setup'); setFirst(''); setBuffer(''); setError(''); }, 900); }
+  const press = (digit) => {
+    setBuffer(prev => {
+      if (prev.length >= 4) return prev;
+      const next = prev + digit;
+      if (next.length === 4) {
+        setTimeout(() => commit(next), 120);
+      }
+      return next;
+    });
+  };
+
+  const commit = (val) => {
+    const s = stageRef.current;
+    if (s === 'setup') {
+      firstRef.current = val;
+      setFirst(val);
+      setBuffer('');
+      setError('');
+      setStage('confirm');
+    } else if (s === 'confirm') {
+      if (val === firstRef.current) {
+        localStorage.setItem('app_pin', val);
+        onSaved(val);
+      } else {
+        setError('PINy się nie zgadzają.');
+        doShake();
+        setTimeout(() => {
+          firstRef.current = '';
+          setFirst('');
+          setBuffer('');
+          setError('');
+          setStage('setup');
+        }, 900);
+      }
     } else {
+      // unlock
       const stored = localStorage.getItem('app_pin');
-      if (val === stored) { onComplete(val); }
-      else { setError('Nieprawidłowy PIN.'); doShake(); setTimeout(() => { setBuffer(''); setError(''); }, 800); }
+      if (val === stored) {
+        onUnlocked();
+      } else {
+        setError('Nieprawidłowy PIN.');
+        doShake();
+        setTimeout(() => { setBuffer(''); setError(''); }, 800);
+      }
     }
   };
 
-  const doShake = () => { setShake(true); setTimeout(() => setShake(false), 400); };
-
-  const icons = { setup: '🔐', 'setup-confirm': '🔄', unlock: '🔐' };
-  const titles = { setup: 'Ustaw PIN', 'setup-confirm': 'Potwierdź PIN', unlock: 'Urodziny' };
-  const subs = { setup: 'Wpisz 4-cyfrowy PIN,\nktóry będzie chronić Twój kalendarz.', 'setup-confirm': 'Wpisz PIN jeszcze raz,\naby potwierdzić.', unlock: 'Wpisz PIN, aby otworzyć kalendarz.' };
+  const del = () => setBuffer(b => b.slice(0, -1));
 
   useEffect(() => {
     const handler = (e) => {
-      if (e.key >= '0' && e.key <= '9') addKey(e.key);
-      else if (e.key === 'Backspace') setBuffer(b => b.slice(0, -1));
+      if (e.key >= '0' && e.key <= '9') press(e.key);
+      else if (e.key === 'Backspace') del();
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  });
+  }, []);
+
+  const icons  = { setup: '🔐', confirm: '🔄', unlock: '🔐' };
+  const titles = { setup: 'Ustaw PIN', confirm: 'Potwierdź PIN', unlock: 'Urodziny' };
+  const subs   = {
+    setup:   'Wpisz 4-cyfrowy PIN,\nktóry będzie chronić Twój kalendarz.',
+    confirm: 'Wpisz PIN jeszcze raz,\naby potwierdzić.',
+    unlock:  'Wpisz PIN, aby otworzyć kalendarz.',
+  };
 
   return (
     <div className="pin-screen">
-      <div style={{ fontSize: 52, marginBottom: 16 }}>{icons[mode]}</div>
-      <div style={{ fontSize: 24, fontWeight: 700, marginBottom: 6 }}>{titles[mode]}</div>
-      <div style={{ fontSize: 15, color: 'var(--text2)', marginBottom: 40, textAlign: 'center', lineHeight: 1.5, whiteSpace: 'pre-line' }}>{subs[mode]}</div>
+      <div style={{ fontSize: 52, marginBottom: 16 }}>{icons[stage]}</div>
+      <div style={{ fontSize: 24, fontWeight: 700, marginBottom: 6 }}>{titles[stage]}</div>
+      <div style={{ fontSize: 15, color: 'var(--text2)', marginBottom: 40, textAlign: 'center', lineHeight: 1.5, whiteSpace: 'pre-line' }}>{subs[stage]}</div>
       <div style={{ display: 'flex', gap: 16, marginBottom: 40 }}>
         {[0,1,2,3].map(i => <div key={i} className={`pin-dot${buffer.length > i ? ' filled' : ''}${shake ? ' error' : ''}`} />)}
       </div>
       <div className="pin-numpad">
         {['1','2','3','4','5','6','7','8','9','','0','⌫'].map((k, i) => (
-          <button key={i} className={`pin-key${k === '' ? ' empty' : ''}`} onClick={() => k === '⌫' ? setBuffer(b => b.slice(0, -1)) : k !== '' ? addKey(k) : null}>{k}</button>
+          <button key={i} className={`pin-key${k === '' ? ' empty' : ''}`}
+            onClick={() => k === '⌫' ? del() : k !== '' ? press(k) : null}>{k}</button>
         ))}
       </div>
       <div style={{ fontSize: 14, color: '#E24B4A', marginTop: 20, height: 20, textAlign: 'center' }}>{error}</div>
-      {mode === 'unlock' && <button className="pin-link" onClick={onReset}>Zapomniałem PINu (reset danych)</button>}
+      {stage === 'unlock' && <button className="pin-link" onClick={onReset}>Zapomniałem PINu (reset danych)</button>}
     </div>
   );
 }
@@ -493,12 +526,9 @@ function EditProfileSheet({ open, onClose, profile, onSave }) {
 
 // ── MAIN APP ──────────────────────────────────────────────
 export default function Home() {
-  // Combined screen+pinMode to avoid rendering with stale mode
-  const [appState, setAppState] = useState({ screen: 'loading', pinMode: 'setup' });
-  const screen = appState.screen;
-  const pinMode = appState.pinMode;
-  const setScreen = (s) => setAppState(prev => ({ ...prev, screen: s }));
-  const setPinMode = (m) => setAppState(prev => ({ ...prev, pinMode: m }));
+  const [screen, setScreen] = useState('loading');
+  // initialStage is set once when we know whether PIN exists
+  const [pinStage, setPinStage] = useState('setup');
   const [entries, setEntries] = useState([]);
   const [profile, setProfile] = useState(null);
   const [pendingAdd, setPendingAdd] = useState(null);
@@ -519,8 +549,8 @@ export default function Home() {
       history.replaceState({}, '', window.location.pathname);
     }
     const stored = localStorage.getItem('app_pin');
-    // Set screen and pinMode atomically in a single state update
-    setAppState({ screen: 'pin', pinMode: stored ? 'unlock' : 'setup' });
+    setPinStage(stored ? 'unlock' : 'setup');
+    setScreen('pin');
 
     const t = new Date();
     const days = ['niedziela','poniedziałek','wtorek','środa','czwartek','piątek','sobota'];
@@ -557,15 +587,13 @@ export default function Home() {
     else setScreen('app');
   }, []);
 
-  const handlePinComplete = (pin) => {
-    if (pinMode === 'setup') localStorage.setItem('app_pin', pin);
-    enterApp();
-  };
+  const handlePinSaved = () => { enterApp(); };
+  const handlePinUnlocked = () => { enterApp(); };
 
   const handleResetPin = () => {
     if (!confirm('Resetowanie PINu usunie wszystkie dane. Kontynuować?')) return;
     localStorage.removeItem('app_pin'); localStorage.removeItem('birthdays'); localStorage.removeItem('user_profile');
-    setEntries([]); setProfile(null); setAppState({ screen: 'pin', pinMode: 'setup' });
+    setEntries([]); setProfile(null); setPinStage('setup'); setScreen('pin');
   };
 
   const handleSaveProfile = (p) => {
@@ -601,7 +629,7 @@ export default function Home() {
   if (screen === 'loading') return null;
 
   if (screen === 'pin') return (
-    <PinScreen mode={pinMode} onComplete={handlePinComplete} onModeChange={setPinMode} onReset={handleResetPin} />
+    <PinScreen initialStage={pinStage} onSaved={handlePinSaved} onUnlocked={handlePinUnlocked} onReset={handleResetPin} />
   );
 
   if (screen === 'profile-setup') return (
@@ -626,7 +654,7 @@ export default function Home() {
           )}
           <button className="add-btn" onClick={() => { setEditEntry(null); setSheet('add'); }}>+ Dodaj</button>
           <button className="icon-btn" onClick={() => setSheet('qr')} title="QR kod" style={{ fontSize: 18 }}>📱</button>
-          <button className="icon-btn" onClick={() => { setSheet(null); setAppState({ screen: 'pin', pinMode: 'unlock' }); }} title="Zablokuj" style={{ fontSize: 18 }}>🔒</button>
+          <button className="icon-btn" onClick={() => { setSheet(null); setPinStage('unlock'); setScreen('pin'); }} title="Zablokuj" style={{ fontSize: 18 }}>🔒</button>
         </div>
       </div>
 
