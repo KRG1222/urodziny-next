@@ -92,9 +92,14 @@ function PinScreen({ mode, onComplete, onModeChange, onReset }) {
   const [first, setFirst] = useState('');
   const [error, setError] = useState('');
   const [shake, setShake] = useState(false);
-  const currentMode = useRef(mode);
+  const modeRef = useRef(mode);
+  const firstRef = useRef('');
 
-  useEffect(() => { currentMode.current = mode; setBuffer(''); setError(''); }, [mode]);
+  useEffect(() => {
+    modeRef.current = mode;
+    setBuffer('');
+    setError('');
+  }, [mode]);
 
   const addKey = (d) => {
     if (buffer.length >= 4) return;
@@ -104,12 +109,14 @@ function PinScreen({ mode, onComplete, onModeChange, onReset }) {
   };
 
   const handle = (val) => {
-    if (currentMode.current === 'setup') {
+    const m = modeRef.current;
+    if (m === 'setup') {
+      firstRef.current = val;
       setFirst(val); setBuffer(''); setError('');
       onModeChange('setup-confirm');
-    } else if (currentMode.current === 'setup-confirm') {
-      if (val === first) { onComplete(val); }
-      else { setError('PINy się nie zgadzają.'); doShake(); setTimeout(() => { onModeChange('setup'); setFirst(''); setBuffer(''); setError(''); }, 900); }
+    } else if (m === 'setup-confirm') {
+      if (val === firstRef.current) { onComplete(val); }
+      else { setError('PINy się nie zgadzają.'); doShake(); setTimeout(() => { onModeChange('setup'); firstRef.current = ''; setFirst(''); setBuffer(''); setError(''); }, 900); }
     } else {
       const stored = localStorage.getItem('app_pin');
       if (val === stored) { onComplete(val); }
@@ -486,8 +493,14 @@ function EditProfileSheet({ open, onClose, profile, onSave }) {
 
 // ── MAIN APP ──────────────────────────────────────────────
 export default function Home() {
-  const [screen, setScreen] = useState('loading'); // loading | pin-setup | pin-unlock | pin-confirm | profile-setup | app
-  const [pinMode, setPinMode] = useState('setup');
+  const [screen, setScreen] = useState('loading');
+  const [pinMode, setPinMode] = useState(() => {
+    // Initialize immediately from localStorage to avoid flash of wrong mode
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('app_pin') ? 'unlock' : 'setup';
+    }
+    return 'setup';
+  });
   const [entries, setEntries] = useState([]);
   const [profile, setProfile] = useState(null);
   const [pendingAdd, setPendingAdd] = useState(null);
@@ -508,8 +521,13 @@ export default function Home() {
       history.replaceState({}, '', window.location.pathname);
     }
     const stored = localStorage.getItem('app_pin');
-    if (!stored) { setPinMode('setup'); setScreen('pin'); }
-    else { setPinMode('unlock'); setScreen('pin'); }
+    if (!stored) {
+      setPinMode('setup');
+      setScreen('pin');
+    } else {
+      setPinMode('unlock');
+      setScreen('pin');
+    }
 
     const t = new Date();
     const days = ['niedziela','poniedziałek','wtorek','środa','czwartek','piątek','sobota'];
