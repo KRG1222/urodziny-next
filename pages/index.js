@@ -64,22 +64,22 @@ async function uploadPhoto(base64) {
 
 // ── PUSH NOTIFICATIONS ────────────────────────────────────
 async function requestNotifications() {
-  if (!('Notification' in window)) return false;
-  const perm = await Notification.requestPermission();
-  return perm === 'granted';
+  try {
+    if (typeof Notification === 'undefined') return false;
+    const perm = await Notification.requestPermission();
+    return perm === 'granted';
+  } catch(e) { return false; }
 }
 
 function scheduleNotificationsCheck(entries) {
-  if (!('Notification' in window) || Notification.permission !== 'granted') return;
-  const today = new Date(); today.setHours(0, 0, 0, 0);
-  entries.forEach(e => {
-    const days = daysUntil(e.date);
-    if (days === 1) {
-      new Notification(`🎂 Jutro urodziny!`, { body: `${e.name} obchodzi jutro urodziny!`, icon: '/favicon.ico' });
-    } else if (days === 0) {
-      new Notification(`🎉 Dzisiaj urodziny!`, { body: `${e.name} obchodzi dzisiaj urodziny!`, icon: '/favicon.ico' });
-    }
-  });
+  try {
+    if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+    entries.forEach(e => {
+      const days = daysUntil(e.date);
+      if (days === 1) new Notification('🎂 Jutro urodziny!', { body: `${e.name} obchodzi jutro urodziny!` });
+      else if (days === 0) new Notification('🎉 Dzisiaj urodziny!', { body: `${e.name} obchodzi dzisiaj urodziny!` });
+    });
+  } catch(e) { console.warn('Notifications not supported', e); }
 }
 
 // ── AVATAR ────────────────────────────────────────────────
@@ -701,7 +701,7 @@ export default function Home() {
     const stored = localStorage.getItem('app_pin');
     setPinStage(stored ? 'unlock' : 'setup');
     setScreen('pin');
-    setNotifEnabled(Notification?.permission === 'granted');
+    setNotifEnabled(typeof Notification !== 'undefined' && Notification.permission === 'granted');
 
     const t = new Date();
     const days = ['niedziela','poniedziałek','wtorek','środa','czwartek','piątek','sobota'];
