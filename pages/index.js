@@ -56,17 +56,17 @@ function Avatar({ entry, size = 46 }) {
   return <div style={{ width: size, height: size, borderRadius: '50%', background: col.bg, color: col.text, display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: Math.round(size * 0.33), flexShrink: 0 }}>{initials(entry.name)}</div>;
 }
 
-// ── PHOTO UPLOAD HELPER ───────────────────────────────────
-async function uploadPhoto(base64, name) {
-  const filename = `${Date.now()}-${name.replace(/\s+/g, '-').toLowerCase()}.jpg`;
-  const res = await fetch('/api/upload', {
+// ── PHOTO UPLOAD HELPER (ImgBB) ──────────────────────────
+async function uploadPhoto(base64) {
+  const formData = new FormData();
+  formData.append('image', base64.replace(/^data:image\/\w+;base64,/, ''));
+  const res = await fetch('https://api.imgbb.com/1/upload?key=3aad24d59db7bae281e99d817ae81732', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ image: base64, filename }),
+    body: formData,
   });
   if (!res.ok) throw new Error('Upload failed');
   const data = await res.json();
-  return data.url;
+  return data.data.url;
 }
 
 // ── PHOTO PICKER COMPONENT ────────────────────────────────
@@ -173,7 +173,7 @@ function SetupProfileScreen({ onSave, onSkip }) {
     if (photo) {
       try {
         setUploading(true);
-        photoUrl = await uploadPhoto(photo, name.trim());
+        photoUrl = await uploadPhoto(photo);
       } catch (e) {
         alert('Nie udało się przesłać zdjęcia. Spróbuj ponownie.');
         setUploading(false); return;
@@ -388,7 +388,7 @@ function EntrySheet({ open, onClose, entry, onSave }) {
     if (photo && photo.startsWith('data:')) {
       try {
         setUploading(true);
-        photoUrl = await uploadPhoto(photo, name.trim());
+        photoUrl = await uploadPhoto(photo);
       } catch { alert('Nie udało się przesłać zdjęcia.'); setUploading(false); return; }
       finally { setUploading(false); }
     }
@@ -462,7 +462,7 @@ function EditProfileSheet({ open, onClose, profile, onSave }) {
     if (!name.trim() || !dob) { alert('Podaj imię i datę urodzin.'); return; }
     let photoUrl = photo;
     if (photo && photo.startsWith('data:')) {
-      try { setUploading(true); photoUrl = await uploadPhoto(photo, name.trim()); }
+      try { setUploading(true); photoUrl = await uploadPhoto(photo); }
       catch { alert('Nie udało się przesłać zdjęcia.'); setUploading(false); return; }
       finally { setUploading(false); }
     }
