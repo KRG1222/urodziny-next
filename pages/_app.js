@@ -141,6 +141,7 @@ export default function App({ Component, pageProps }) {
         .setup-continue-btn { width: 100%; padding: 15px; border-radius: var(--radius-sm); border: none; background: var(--text); color: var(--bg); font-size: 16px; font-weight: 700; cursor: pointer; margin-top: 8px; }
         .setup-continue-btn:disabled { opacity: .5; }
         .setup-skip { text-align: center; margin-top: 14px; font-size: 14px; color: var(--text3); cursor: pointer; background: none; border: none; text-decoration: underline; width: 100%; }
+        div::-webkit-scrollbar { display: none; }
       `}</style>
     </>
   );
