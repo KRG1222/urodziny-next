@@ -1,0 +1,690 @@
+import { useEffect, useRef, useState, useCallback } from 'react';
+import Head from 'next/head';
+
+// ── HELPERS ──────────────────────────────────────────────
+const COLORS = [
+  { bg: '#EEEDFE', text: '#3C3489' }, { bg: '#E1F5EE', text: '#085041' },
+  { bg: '#FAECE7', text: '#4A1B0C' }, { bg: '#E6F1FB', text: '#0C447C' },
+  { bg: '#FAEEDA', text: '#633806' }, { bg: '#FBEAF0', text: '#4B1528' },
+  { bg: '#EAF3DE', text: '#27500A' },
+];
+function getColor(name) {
+  let h = 0; for (const c of name) h = (h * 31 + c.charCodeAt(0)) & 0xffffffff;
+  return COLORS[Math.abs(h) % COLORS.length];
+}
+function initials(name) { return name.trim().split(/\s+/).slice(0, 2).map(w => w[0].toUpperCase()).join(''); }
+function daysUntil(s) {
+  const [y, m, d] = s.split('-').map(Number);
+  const t = new Date(); t.setHours(0, 0, 0, 0);
+  let nx = new Date(t.getFullYear(), m - 1, d);
+  if (nx < t) nx = new Date(t.getFullYear() + 1, m - 1, d);
+  return Math.round((nx - t) / 86400000);
+}
+function formatDate(s) {
+  const [y, m, d] = s.split('-').map(Number);
+  const mo = ['stycznia','lutego','marca','kwietnia','maja','czerwca','lipca','sierpnia','września','października','listopada','grudnia'];
+  return `${d} ${mo[m - 1]} ${y}`;
+}
+function calcAge(s) {
+  const [y, m, d] = s.split('-').map(Number); const t = new Date();
+  let a = t.getFullYear() - y;
+  if (t.getMonth() + 1 < m || (t.getMonth() + 1 === m && t.getDate() < d)) a--;
+  return a;
+}
+function ageSuffix(n) { if (n === 1) return 'rok'; if (n >= 2 && n <= 4) return 'lata'; return 'lat'; }
+function zodiac(s) {
+  const [y, m, d] = s.split('-').map(Number);
+  const sg = [
+    { name: 'Koziorożec', symbol: '♑', end: [1, 19] }, { name: 'Wodnik', symbol: '♒', end: [2, 18] },
+    { name: 'Ryby', symbol: '♓', end: [3, 20] }, { name: 'Baran', symbol: '♈', end: [4, 19] },
+    { name: 'Byk', symbol: '♉', end: [5, 20] }, { name: 'Bliźnięta', symbol: '♊', end: [6, 20] },
+    { name: 'Rak', symbol: '♋', end: [7, 22] }, { name: 'Lew', symbol: '♌', end: [8, 22] },
+    { name: 'Panna', symbol: '♍', end: [9, 22] }, { name: 'Waga', symbol: '♎', end: [10, 22] },
+    { name: 'Skorpion', symbol: '♏', end: [11, 21] }, { name: 'Strzelec', symbol: '♐', end: [12, 21] },
+    { name: 'Koziorożec', symbol: '♑', end: [12, 31] },
+  ];
+  for (const z of sg) if (m < z.end[0] || (m === z.end[0] && d <= z.end[1])) return z;
+  return sg[0];
+}
+function ls(key) { try { return JSON.parse(localStorage.getItem(key) || 'null'); } catch { return null; } }
+function lsSet(key, val) { localStorage.setItem(key, JSON.stringify(val)); }
+
+// ── AVATAR COMPONENT ─────────────────────────────────────
+function Avatar({ entry, size = 46 }) {
+  const col = getColor(entry.name);
+  if (entry.photo) return <img src={entry.photo} alt={entry.name} style={{ width: size, height: size, borderRadius: '50%', objectFit: 'cover', flexShrink: 0 }} />;
+  return <div style={{ width: size, height: size, borderRadius: '50%', background: col.bg, color: col.text, display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: Math.round(size * 0.33), flexShrink: 0 }}>{initials(entry.name)}</div>;
+}
+
+// ── PHOTO UPLOAD HELPER ───────────────────────────────────
+async function uploadPhoto(base64, name) {
+  const filename = `${Date.now()}-${name.replace(/\s+/g, '-').toLowerCase()}.jpg`;
+  const res = await fetch('/api/upload', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ image: base64, filename }),
+  });
+  if (!res.ok) throw new Error('Upload failed');
+  const data = await res.json();
+  return data.url;
+}
+
+// ── PHOTO PICKER COMPONENT ────────────────────────────────
+function PhotoPicker({ photo, name, onPhoto, onRemove, inputId }) {
+  const col = name ? getColor(name) : { bg: 'var(--bg3)', text: 'var(--text3)' };
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 14 }}>
+      <div style={{ width: 60, height: 60, borderRadius: '50%', overflow: 'hidden', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: 18, background: photo ? undefined : col.bg, color: photo ? undefined : col.text }}>
+        {photo ? <img src={photo} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : (name ? initials(name) : '?')}
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flex: 1 }}>
+        <label htmlFor={inputId} className="btn-photo" style={{ cursor: 'pointer', textAlign: 'center' }}>📷 {photo ? 'Zmień zdjęcie' : 'Dodaj zdjęcie'}</label>
+        <input type="file" id={inputId} accept="image/*" style={{ display: 'none' }} onChange={onPhoto} />
+        {photo && <button className="btn-photo-remove" onClick={onRemove}>Usuń zdjęcie</button>}
+      </div>
+    </div>
+  );
+}
+
+// ── PIN SCREEN ────────────────────────────────────────────
+function PinScreen({ mode, onComplete, onModeChange, onReset }) {
+  const [buffer, setBuffer] = useState('');
+  const [first, setFirst] = useState('');
+  const [error, setError] = useState('');
+  const [shake, setShake] = useState(false);
+  const currentMode = useRef(mode);
+
+  useEffect(() => { currentMode.current = mode; setBuffer(''); setError(''); }, [mode]);
+
+  const addKey = (d) => {
+    if (buffer.length >= 4) return;
+    const next = buffer + d;
+    setBuffer(next);
+    if (next.length === 4) setTimeout(() => handle(next), 120);
+  };
+
+  const handle = (val) => {
+    if (currentMode.current === 'setup') {
+      setFirst(val); setBuffer(''); setError('');
+      onModeChange('setup-confirm');
+    } else if (currentMode.current === 'setup-confirm') {
+      if (val === first) { onComplete(val); }
+      else { setError('PINy się nie zgadzają.'); doShake(); setTimeout(() => { onModeChange('setup'); setFirst(''); setBuffer(''); setError(''); }, 900); }
+    } else {
+      const stored = localStorage.getItem('app_pin');
+      if (val === stored) { onComplete(val); }
+      else { setError('Nieprawidłowy PIN.'); doShake(); setTimeout(() => { setBuffer(''); setError(''); }, 800); }
+    }
+  };
+
+  const doShake = () => { setShake(true); setTimeout(() => setShake(false), 400); };
+
+  const icons = { setup: '🔐', 'setup-confirm': '🔄', unlock: '🔐' };
+  const titles = { setup: 'Ustaw PIN', 'setup-confirm': 'Potwierdź PIN', unlock: 'Urodziny' };
+  const subs = { setup: 'Wpisz 4-cyfrowy PIN,\nktóry będzie chronić Twój kalendarz.', 'setup-confirm': 'Wpisz PIN jeszcze raz,\naby potwierdzić.', unlock: 'Wpisz PIN, aby otworzyć kalendarz.' };
+
+  useEffect(() => {
+    const handler = (e) => {
+      if (e.key >= '0' && e.key <= '9') addKey(e.key);
+      else if (e.key === 'Backspace') setBuffer(b => b.slice(0, -1));
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  });
+
+  return (
+    <div className="pin-screen">
+      <div style={{ fontSize: 52, marginBottom: 16 }}>{icons[mode]}</div>
+      <div style={{ fontSize: 24, fontWeight: 700, marginBottom: 6 }}>{titles[mode]}</div>
+      <div style={{ fontSize: 15, color: 'var(--text2)', marginBottom: 40, textAlign: 'center', lineHeight: 1.5, whiteSpace: 'pre-line' }}>{subs[mode]}</div>
+      <div style={{ display: 'flex', gap: 16, marginBottom: 40 }}>
+        {[0,1,2,3].map(i => <div key={i} className={`pin-dot${buffer.length > i ? ' filled' : ''}${shake ? ' error' : ''}`} />)}
+      </div>
+      <div className="pin-numpad">
+        {['1','2','3','4','5','6','7','8','9','','0','⌫'].map((k, i) => (
+          <button key={i} className={`pin-key${k === '' ? ' empty' : ''}`} onClick={() => k === '⌫' ? setBuffer(b => b.slice(0, -1)) : k !== '' ? addKey(k) : null}>{k}</button>
+        ))}
+      </div>
+      <div style={{ fontSize: 14, color: '#E24B4A', marginTop: 20, height: 20, textAlign: 'center' }}>{error}</div>
+      {mode === 'unlock' && <button className="pin-link" onClick={onReset}>Zapomniałem PINu (reset danych)</button>}
+    </div>
+  );
+}
+
+// ── SETUP PROFILE SCREEN ──────────────────────────────────
+function SetupProfileScreen({ onSave, onSkip }) {
+  const [name, setName] = useState('');
+  const [dob, setDob] = useState('');
+  const [photo, setPhoto] = useState(null); // base64 preview
+  const [uploading, setUploading] = useState(false);
+
+  const handlePhoto = (e) => {
+    const file = e.target.files[0]; if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => setPhoto(ev.target.result);
+    reader.readAsDataURL(file);
+    e.target.value = '';
+  };
+
+  const handleSave = async () => {
+    if (!name.trim()) { alert('Podaj swoje imię.'); return; }
+    if (!dob) { alert('Podaj datę urodzin.'); return; }
+    let photoUrl = null;
+    if (photo) {
+      try {
+        setUploading(true);
+        photoUrl = await uploadPhoto(photo, name.trim());
+      } catch (e) {
+        alert('Nie udało się przesłać zdjęcia. Spróbuj ponownie.');
+        setUploading(false); return;
+      } finally { setUploading(false); }
+    }
+    onSave({ name: name.trim(), dob, photo: photoUrl });
+  };
+
+  const col = name ? getColor(name) : { bg: 'var(--bg3)', text: 'var(--text3)' };
+
+  return (
+    <div className="setup-profile-screen">
+      <div className="setup-profile-inner">
+        <div style={{ fontSize: 44, marginBottom: 12 }}>🎂</div>
+        <h2 style={{ fontSize: 26, fontWeight: 700, letterSpacing: -0.4, marginBottom: 6 }}>Twój profil</h2>
+        <p style={{ fontSize: 15, color: 'var(--text2)', marginBottom: 28, lineHeight: 1.5 }}>Podaj swoje dane — będziemy liczyć dni do Twoich urodzin i pozwolimy Ci udostępniać swój profil przez QR kod ze zdjęciem.</p>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 20 }}>
+          <div style={{ width: 72, height: 72, borderRadius: '50%', overflow: 'hidden', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: 22, background: photo ? undefined : col.bg, color: photo ? undefined : col.text }}>
+            {photo ? <img src={photo} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : (name ? initials(name) : '?')}
+          </div>
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <label htmlFor="setup-photo-input" className="btn-photo" style={{ cursor: 'pointer', textAlign: 'center' }}>📷 Dodaj zdjęcie profilowe</label>
+            <input type="file" id="setup-photo-input" accept="image/*" style={{ display: 'none' }} onChange={handlePhoto} />
+            {photo && <button className="btn-photo-remove" onClick={() => setPhoto(null)}>Usuń zdjęcie</button>}
+          </div>
+        </div>
+        <div className="setup-field">
+          <label>Twoje imię i nazwisko</label>
+          <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="np. Jan Kowalski" autoComplete="off" />
+        </div>
+        <div className="setup-field">
+          <label>Twoja data urodzin</label>
+          <input type="date" value={dob} onChange={e => setDob(e.target.value)} />
+        </div>
+        <button className="setup-continue-btn" onClick={handleSave} disabled={uploading}>
+          {uploading ? 'Przesyłanie zdjęcia...' : 'Gotowe →'}
+        </button>
+        <button className="setup-skip" onClick={onSkip}>Pomiń na teraz</button>
+      </div>
+    </div>
+  );
+}
+
+// ── SHEET COMPONENT ───────────────────────────────────────
+function Sheet({ open, onClose, children }) {
+  return (
+    <div className={`overlay${open ? ' open' : ''}`} onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="sheet">{children}</div>
+    </div>
+  );
+}
+
+// ── QR SHEET ─────────────────────────────────────────────
+function QrSheet({ open, onClose, profile, onOpenProfile }) {
+  const [tab, setTab] = useState('show');
+  const [scanResult, setScanResult] = useState(null);
+  const [scanError, setScanError] = useState('');
+  const qrRef = useRef(null);
+  const streamRef = useRef(null);
+  const intervalRef = useRef(null);
+  const videoRef = useRef(null);
+
+  useEffect(() => {
+    if (!open) { stopScan(); return; }
+    if (tab === 'show') { stopScan(); generateQr(); }
+    if (tab === 'scan') startScan();
+  }, [open, tab]);
+
+  useEffect(() => { if (!open) { stopScan(); setScanResult(null); setScanError(''); } }, [open]);
+
+  const generateQr = () => {
+    if (!qrRef.current) return;
+    qrRef.current.innerHTML = '';
+    if (!profile?.dob) return;
+    const photoParam = profile.photo ? `&photo=${encodeURIComponent(profile.photo)}` : '';
+    const payload = `${profile.name}|${profile.dob}`;
+    const url = `${window.location.origin}${window.location.pathname}?add=${encodeURIComponent(payload)}${photoParam}`;
+    if (typeof window !== 'undefined' && window.QRCode) {
+      new window.QRCode(qrRef.current, { text: url, width: 220, height: 220, colorDark: '#1a1a1a', colorLight: '#ffffff', correctLevel: window.QRCode.CorrectLevel.M });
+    }
+  };
+
+  const startScan = async () => {
+    setScanResult(null); setScanError('');
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+      streamRef.current = stream;
+      if (videoRef.current) { videoRef.current.srcObject = stream; await videoRef.current.play(); }
+      if ('BarcodeDetector' in window) {
+        const det = new window.BarcodeDetector({ formats: ['qr_code'] });
+        intervalRef.current = setInterval(async () => {
+          try { const codes = await det.detect(videoRef.current); if (codes.length > 0) processResult(codes[0].rawValue); } catch {}
+        }, 400);
+      } else { setScanError('Automatyczne skanowanie niedostępne. Użyj aparatu systemowego.'); }
+    } catch { setScanError('Brak dostępu do kamery.'); }
+  };
+
+  const stopScan = () => {
+    if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
+    if (streamRef.current) { streamRef.current.getTracks().forEach(t => t.stop()); streamRef.current = null; }
+    if (videoRef.current) videoRef.current.srcObject = null;
+  };
+
+  const processResult = (raw) => {
+    stopScan();
+    try {
+      const url = new URL(raw);
+      const add = url.searchParams.get('add');
+      const photo = url.searchParams.get('photo');
+      if (add) {
+        const [name, date] = decodeURIComponent(add).split('|');
+        if (name && date) { setScanResult({ name, date, photo: photo ? decodeURIComponent(photo) : null }); return; }
+      }
+    } catch {}
+    setScanError('Nie rozpoznano kodu — spróbuj ponownie.');
+  };
+
+  const addScanned = () => {
+    if (!scanResult) return;
+    const entries = ls('birthdays') || [];
+    if (!entries.find(e => e.name === scanResult.name && e.date === scanResult.date)) {
+      entries.push({ id: Date.now().toString(), name: scanResult.name, date: scanResult.date, ...(scanResult.photo ? { photo: scanResult.photo } : {}) });
+      lsSet('birthdays', entries);
+    }
+    onClose(); setScanResult(null);
+  };
+
+  const shareQr = () => {
+    if (!profile) return;
+    const photoParam = profile.photo ? `&photo=${encodeURIComponent(profile.photo)}` : '';
+    const url = `${window.location.origin}${window.location.pathname}?add=${encodeURIComponent(`${profile.name}|${profile.dob}`)}${photoParam}`;
+    if (navigator.share) navigator.share({ title: `Urodziny – ${profile.name}`, text: 'Dodaj moje urodziny!', url });
+    else navigator.clipboard.writeText(url).then(() => alert('Link skopiowany!'));
+  };
+
+  const z = profile?.dob ? zodiac(profile.dob) : null;
+
+  return (
+    <Sheet open={open} onClose={onClose}>
+      <div className="sheet-handle" />
+      <h2>Udostępnij datę urodzin</h2>
+      <div className="qr-tabs">
+        <button className={`qr-tab${tab === 'show' ? ' active' : ''}`} onClick={() => setTab('show')}>📲 Mój QR</button>
+        <button className={`qr-tab${tab === 'scan' ? ' active' : ''}`} onClick={() => setTab('scan')}>🔍 Skanuj</button>
+      </div>
+
+      {tab === 'show' && (
+        <div>
+          <div className="qr-box">
+            {(!profile?.dob) ? (
+              <div style={{ textAlign: 'center', padding: '32px 0' }}>
+                <div style={{ fontSize: 40, marginBottom: 12 }}>👤</div>
+                <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 6 }}>Uzupełnij swój profil</div>
+                <div style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 20 }}>Podaj imię i datę urodzin, aby wygenerować QR kod.</div>
+                <button onClick={() => { onClose(); onOpenProfile(); }} style={{ padding: '11px 22px', borderRadius: 9, border: 'none', background: 'var(--text)', color: 'var(--bg)', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>Ustaw profil →</button>
+              </div>
+            ) : (
+              <>
+                <div ref={qrRef} id="qr-canvas" />
+                <div style={{ fontSize: 16, fontWeight: 600, textAlign: 'center' }}>{profile.name}</div>
+                <div style={{ fontSize: 13, color: 'var(--text2)', textAlign: 'center', marginTop: -8 }}>{formatDate(profile.dob)} · {z?.symbol} {z?.name}</div>
+              </>
+            )}
+          </div>
+          {profile?.dob && <button className="qr-share-btn" onClick={shareQr}>🔗 Udostępnij link</button>}
+        </div>
+      )}
+
+      {tab === 'scan' && (
+        <div className="scan-box">
+          <video ref={videoRef} playsInline autoPlay muted style={{ width: '100%', maxWidth: 320, borderRadius: 12, aspectRatio: '1', objectFit: 'cover', background: '#000' }} />
+          <div style={{ fontSize: 13, color: 'var(--text2)', textAlign: 'center' }}>Skieruj kamerę na kod QR osoby,<br />której chcesz dodać urodziny.</div>
+          {scanError && <div className="scan-result error-msg">{scanError}</div>}
+          {scanResult && (
+            <>
+              <div className="scan-result">✓ Znaleziono: {scanResult.name}, {formatDate(scanResult.date)}{scanResult.photo ? ' · ze zdjęciem 📷' : ''}</div>
+              <button className="btn-scan-add" onClick={addScanned}>+ Dodaj do kalendarza</button>
+            </>
+          )}
+        </div>
+      )}
+
+      <div className="sheet-actions" style={{ marginTop: 16 }}>
+        <button className="btn-cancel" onClick={onClose}>Zamknij</button>
+      </div>
+    </Sheet>
+  );
+}
+
+// ── ENTRY SHEET ───────────────────────────────────────────
+function EntrySheet({ open, onClose, entry, onSave }) {
+  const [name, setName] = useState('');
+  const [date, setDate] = useState('');
+  const [photo, setPhoto] = useState(null);
+  const [uploading, setUploading] = useState(false);
+
+  useEffect(() => {
+    if (open) { setName(entry?.name || ''); setDate(entry?.date || ''); setPhoto(entry?.photo || null); }
+  }, [open, entry]);
+
+  const handlePhoto = (e) => {
+    const file = e.target.files[0]; if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => setPhoto(ev.target.result);
+    reader.readAsDataURL(file); e.target.value = '';
+  };
+
+  const handleSave = async () => {
+    if (!name.trim() || !date) return;
+    let photoUrl = photo;
+    // If photo is a new base64 (not already a URL), upload it
+    if (photo && photo.startsWith('data:')) {
+      try {
+        setUploading(true);
+        photoUrl = await uploadPhoto(photo, name.trim());
+      } catch { alert('Nie udało się przesłać zdjęcia.'); setUploading(false); return; }
+      finally { setUploading(false); }
+    }
+    onSave({ name: name.trim(), date, photo: photoUrl || null });
+  };
+
+  const col = name ? getColor(name) : { bg: 'var(--bg3)', text: 'var(--text3)' };
+  const previewPhoto = photo && (photo.startsWith('data:') || photo.startsWith('http')) ? photo : null;
+
+  return (
+    <Sheet open={open} onClose={onClose}>
+      <div className="sheet-handle" />
+      <h2>{entry ? 'Edytuj osobę' : 'Nowa osoba'}</h2>
+      <PhotoPicker photo={previewPhoto} name={name} onPhoto={handlePhoto} onRemove={() => setPhoto(null)} inputId="entry-photo-input" />
+      <div className="field"><label>Imię i nazwisko</label><input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="np. Jan Kowalski" autoComplete="off" /></div>
+      <div className="field"><label>Data urodzin</label><input type="date" value={date} onChange={e => setDate(e.target.value)} /></div>
+      <div className="sheet-actions">
+        <button className="btn-cancel" onClick={onClose}>Anuluj</button>
+        <button className="btn-save" onClick={handleSave} disabled={uploading}>{uploading ? 'Przesyłanie...' : 'Zapisz'}</button>
+      </div>
+    </Sheet>
+  );
+}
+
+// ── PROFILE SHEET ─────────────────────────────────────────
+function ProfileSheet({ open, onClose, profile, onOpenQr, onEdit }) {
+  if (!profile) return null;
+  const col = getColor(profile.name);
+  const days = daysUntil(profile.dob);
+  const z = zodiac(profile.dob);
+  return (
+    <Sheet open={open} onClose={onClose}>
+      <div className="sheet-handle" />
+      <div className="profile-header">
+        <div className="profile-avatar-big">
+          {profile.photo ? <img src={profile.photo} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : <div style={{ width: 80, height: 80, borderRadius: '50%', background: col.bg, color: col.text, display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: 26 }}>{initials(profile.name)}</div>}
+        </div>
+        <div style={{ fontSize: 20, fontWeight: 700 }}>{profile.name}</div>
+        <div style={{ fontSize: 14, color: 'var(--text2)' }}>{formatDate(profile.dob)} · {z.symbol} {z.name}</div>
+        <div className="profile-days-badge">{days === 0 ? '🎉 Dzisiaj Twoje urodziny!' : `Do Twoich urodzin: ${days} dni`}</div>
+      </div>
+      <div className="profile-actions">
+        <button className="btn-profile-action" onClick={() => { onClose(); onOpenQr(); }}>📱 QR kod</button>
+        <button className="btn-profile-action" onClick={() => { onClose(); onEdit(); }}>✏️ Edytuj profil</button>
+      </div>
+      <div style={{ height: .5, background: 'var(--border)', margin: '4px 0 16px' }} />
+      <div className="sheet-actions"><button className="btn-cancel" onClick={onClose}>Zamknij</button></div>
+    </Sheet>
+  );
+}
+
+// ── EDIT PROFILE SHEET ────────────────────────────────────
+function EditProfileSheet({ open, onClose, profile, onSave }) {
+  const [name, setName] = useState('');
+  const [dob, setDob] = useState('');
+  const [photo, setPhoto] = useState(null);
+  const [uploading, setUploading] = useState(false);
+
+  useEffect(() => {
+    if (open) { setName(profile?.name || ''); setDob(profile?.dob || ''); setPhoto(profile?.photo || null); }
+  }, [open, profile]);
+
+  const handlePhoto = (e) => {
+    const file = e.target.files[0]; if (!file) return;
+    const reader = new FileReader();
+    reader.onload = ev => setPhoto(ev.target.result);
+    reader.readAsDataURL(file); e.target.value = '';
+  };
+
+  const handleSave = async () => {
+    if (!name.trim() || !dob) { alert('Podaj imię i datę urodzin.'); return; }
+    let photoUrl = photo;
+    if (photo && photo.startsWith('data:')) {
+      try { setUploading(true); photoUrl = await uploadPhoto(photo, name.trim()); }
+      catch { alert('Nie udało się przesłać zdjęcia.'); setUploading(false); return; }
+      finally { setUploading(false); }
+    }
+    onSave({ name: name.trim(), dob, photo: photoUrl || null });
+  };
+
+  return (
+    <Sheet open={open} onClose={onClose}>
+      <div className="sheet-handle" />
+      <h2>Edytuj profil</h2>
+      <PhotoPicker photo={photo && (photo.startsWith('data:') || photo.startsWith('http')) ? photo : null} name={name} onPhoto={handlePhoto} onRemove={() => setPhoto(null)} inputId="profile-edit-photo" />
+      <div className="field"><label>Imię i nazwisko</label><input type="text" value={name} onChange={e => setName(e.target.value)} /></div>
+      <div className="field"><label>Data urodzin</label><input type="date" value={dob} onChange={e => setDob(e.target.value)} /></div>
+      <div className="sheet-actions">
+        <button className="btn-cancel" onClick={onClose}>Anuluj</button>
+        <button className="btn-save" onClick={handleSave} disabled={uploading}>{uploading ? 'Przesyłanie...' : 'Zapisz'}</button>
+      </div>
+    </Sheet>
+  );
+}
+
+// ── MAIN APP ──────────────────────────────────────────────
+export default function Home() {
+  const [screen, setScreen] = useState('loading'); // loading | pin-setup | pin-unlock | pin-confirm | profile-setup | app
+  const [pinMode, setPinMode] = useState('setup');
+  const [entries, setEntries] = useState([]);
+  const [profile, setProfile] = useState(null);
+  const [pendingAdd, setPendingAdd] = useState(null);
+  const [sheet, setSheet] = useState(null); // null | 'add' | 'edit' | 'qr' | 'profile' | 'edit-profile'
+  const [editEntry, setEditEntry] = useState(null);
+  const [todayLabel, setTodayLabel] = useState('');
+
+  // Init
+  useEffect(() => {
+    // Check deep link
+    const params = new URLSearchParams(window.location.search);
+    if (params.has('add')) {
+      try {
+        const [name, date] = decodeURIComponent(params.get('add')).split('|');
+        const photo = params.has('photo') ? decodeURIComponent(params.get('photo')) : null;
+        if (name && date) setPendingAdd({ name, date, photo });
+      } catch {}
+      history.replaceState({}, '', window.location.pathname);
+    }
+    const stored = localStorage.getItem('app_pin');
+    if (!stored) { setPinMode('setup'); setScreen('pin'); }
+    else { setPinMode('unlock'); setScreen('pin'); }
+
+    const t = new Date();
+    const days = ['niedziela','poniedziałek','wtorek','środa','czwartek','piątek','sobota'];
+    const months = ['stycznia','lutego','marca','kwietnia','maja','czerwca','lipca','sierpnia','września','października','listopada','grudnia'];
+    setTodayLabel(`${days[t.getDay()]}, ${t.getDate()} ${months[t.getMonth()]}`);
+  }, []);
+
+  // Load QRCode.js
+  useEffect(() => {
+    if (typeof window !== 'undefined' && !window.QRCode) {
+      const s = document.createElement('script');
+      s.src = 'https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js';
+      document.head.appendChild(s);
+    }
+  }, []);
+
+  const enterApp = useCallback(() => {
+    const e = ls('birthdays') || [];
+    const p = ls('user_profile');
+    setEntries(e); setProfile(p);
+    // Handle pending deep-link add
+    setPendingAdd(prev => {
+      if (prev) {
+        const exists = e.find(x => x.name === prev.name && x.date === prev.date);
+        if (!exists) {
+          const updated = [...e, { id: Date.now().toString(), name: prev.name, date: prev.date, ...(prev.photo ? { photo: prev.photo } : {}) }];
+          lsSet('birthdays', updated); setEntries(updated);
+          setTimeout(() => alert(`✓ Dodano urodziny: ${prev.name} (${formatDate(prev.date)})${prev.photo ? ' ze zdjęciem 📷' : ''}`), 300);
+        }
+      }
+      return null;
+    });
+    if (!p) setScreen('profile-setup');
+    else setScreen('app');
+  }, []);
+
+  const handlePinComplete = (pin) => {
+    if (pinMode === 'setup') localStorage.setItem('app_pin', pin);
+    enterApp();
+  };
+
+  const handleResetPin = () => {
+    if (!confirm('Resetowanie PINu usunie wszystkie dane. Kontynuować?')) return;
+    localStorage.removeItem('app_pin'); localStorage.removeItem('birthdays'); localStorage.removeItem('user_profile');
+    setEntries([]); setProfile(null); setPinMode('setup'); setScreen('pin');
+  };
+
+  const handleSaveProfile = (p) => {
+    lsSet('user_profile', p); setProfile(p); setScreen('app');
+  };
+
+  const saveEntry = (data) => {
+    let updated;
+    if (editEntry) {
+      updated = entries.map(e => e.id === editEntry.id ? { ...e, ...data, photo: data.photo || undefined } : e);
+    } else {
+      const entry = { id: Date.now().toString(), ...data };
+      if (!entry.photo) delete entry.photo;
+      updated = [...entries, entry];
+    }
+    lsSet('birthdays', updated); setEntries(updated); setSheet(null); setEditEntry(null);
+  };
+
+  const deleteEntry = (id) => {
+    if (!confirm('Usunąć tę osobę?')) return;
+    const updated = entries.filter(e => e.id !== id);
+    lsSet('birthdays', updated); setEntries(updated);
+  };
+
+  const sortedEntries = entries.map(e => ({ ...e, days: daysUntil(e.date) })).sort((a, b) => a.days - b.days);
+  const nearest = sortedEntries[0];
+  const soonOthers = sortedEntries.slice(1).filter(e => e.days <= 30);
+  const rest = sortedEntries.filter(e => !soonOthers.includes(e));
+
+  const myDays = profile?.dob ? daysUntil(profile.dob) : null;
+  const col = profile ? getColor(profile.name) : null;
+
+  if (screen === 'loading') return null;
+
+  if (screen === 'pin') return (
+    <PinScreen mode={pinMode} onComplete={handlePinComplete} onModeChange={setPinMode} onReset={handleResetPin} />
+  );
+
+  if (screen === 'profile-setup') return (
+    <SetupProfileScreen onSave={handleSaveProfile} onSkip={() => setScreen('app')} />
+  );
+
+  return (
+    <>
+      <div className="header">
+        <div className="header-left">
+          <h1>Urodziny 🎂</h1>
+          <p>{todayLabel}</p>
+        </div>
+        <div className="header-right">
+          {profile?.dob && (
+            <button className="my-bday-chip" onClick={() => setSheet('profile')}>
+              <div className="chip-avatar">
+                {profile.photo ? <img src={profile.photo} style={{ width: 20, height: 20, borderRadius: '50%', objectFit: 'cover' }} /> : <span style={{ background: col.bg, color: col.text, width: 20, height: 20, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 9, fontWeight: 700 }}>{initials(profile.name)}</span>}
+              </div>
+              <span>{myDays === 0 ? '🎉 Dzisiaj!' : `${myDays} dni`}</span>
+            </button>
+          )}
+          <button className="add-btn" onClick={() => { setEditEntry(null); setSheet('add'); }}>+ Dodaj</button>
+          <button className="icon-btn" onClick={() => setSheet('qr')} title="QR kod" style={{ fontSize: 18 }}>📱</button>
+          <button className="icon-btn" onClick={() => { setSheet(null); setPinMode('unlock'); setScreen('pin'); }} title="Zablokuj" style={{ fontSize: 18 }}>🔒</button>
+        </div>
+      </div>
+
+      <div className="content">
+        {entries.length === 0 ? (
+          <div className="empty"><div className="empty-icon">🎈</div>Brak zapisanych urodzin.<br />Dodaj pierwszą osobę!</div>
+        ) : (
+          <>
+            <div className="section">
+              <div className="section-label">Następne urodziny</div>
+              <div className="highlight-banner">
+                <div className="hl-avatar">
+                  {nearest.photo ? <img src={nearest.photo} alt="" /> : <span style={{ color: '#fff', fontWeight: 700, fontSize: 17 }}>{initials(nearest.name)}</span>}
+                </div>
+                <div className="hl-info">
+                  <div className="hl-label">Najbliższe urodziny</div>
+                  <div className="hl-name">{nearest.name}</div>
+                  <div className="hl-meta">{formatDate(nearest.date)} · {calcAge(nearest.date)} {ageSuffix(calcAge(nearest.date))} · {zodiac(nearest.date).symbol} {zodiac(nearest.date).name}</div>
+                </div>
+                <div className="hl-days">{nearest.days === 0 ? '🎉 Dzisiaj!' : nearest.days === 1 ? 'Jutro!' : `za ${nearest.days} dni`}</div>
+              </div>
+            </div>
+
+            {soonOthers.length > 0 && (
+              <div className="section">
+                <div className="section-label">W ciągu 30 dni</div>
+                {soonOthers.map(e => (
+                  <div key={e.id} className="soon-strip">
+                    <div className="ss-dot" />
+                    <Avatar entry={e} size={36} />
+                    <div className="ss-name">{e.name}</div>
+                    <div className="ss-days">{e.days === 0 ? 'Dzisiaj!' : e.days === 1 ? 'Jutro' : `za ${e.days} dni`}</div>
+                    <div className="card-actions">
+                      <button className="icon-btn" onClick={() => { setEditEntry(e); setSheet('edit'); }}><div className="dots-icon"><span /><span /><span /></div></button>
+                      <button className="icon-btn" onClick={() => deleteEntry(e.id)} style={{ fontSize: 18 }}>×</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="section">
+              <div className="section-label">Wszystkie</div>
+              {rest.map(e => {
+                const a = calcAge(e.date);
+                return (
+                  <div key={e.id} className="card">
+                    <Avatar entry={e} size={46} />
+                    <div className="card-info">
+                      <div className="card-name">{e.name}</div>
+                      <div className="card-meta">{formatDate(e.date)} · {a} {ageSuffix(a)} · {zodiac(e.date).symbol} {zodiac(e.date).name}</div>
+                    </div>
+                    {e.days === 0 ? <span className="badge badge-today">Dzisiaj!</span> : e.days <= 7 ? <span className="badge badge-soon">za {e.days} dni</span> : <span className="badge-days">{e.days} dni</span>}
+                    <div className="card-actions">
+                      <button className="icon-btn" onClick={() => { setEditEntry(e); setSheet('edit'); }}><div className="dots-icon"><span /><span /><span /></div></button>
+                      <button className="icon-btn" onClick={() => deleteEntry(e.id)} style={{ fontSize: 18 }}>×</button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        )}
+      </div>
+
+      <EntrySheet open={sheet === 'add' || sheet === 'edit'} onClose={() => { setSheet(null); setEditEntry(null); }} entry={editEntry} onSave={saveEntry} />
+      <ProfileSheet open={sheet === 'profile'} onClose={() => setSheet(null)} profile={profile} onOpenQr={() => setSheet('qr')} onEdit={() => setSheet('edit-profile')} />
+      <EditProfileSheet open={sheet === 'edit-profile'} onClose={() => setSheet(null)} profile={profile} onSave={(p) => { lsSet('user_profile', p); setProfile(p); setSheet(null); }} />
+      <QrSheet open={sheet === 'qr'} onClose={() => setSheet(null)} profile={profile} onOpenProfile={() => setSheet('profile')} />
+    </>
+  );
+}
